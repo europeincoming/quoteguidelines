@@ -1,0 +1,950 @@
+{
+  "quotation_guidelines_spec": {
+    "version": "1.1",
+    "description": "Complete specification for quotation guidelines feature in Nova ERP",
+    "changelog": {
+      "v1.1": "Added offer_format field to commercial_parameters (itemized vs package pricing)"
+    },
+    "overview": "Quotation guidelines capture market/agent/tour-type specific parameters that drive AI quote generation. Guidelines inherit from agent settings where applicable and are overridden by lead parsing data when conflicts arise.",
+    
+    "hierarchy": {
+      "priority_order": [
+        "Lead Parsing Data (highest priority)",
+        "Agent-Specific Guidelines",
+        "Market-Specific Guidelines",
+        "Default System Guidelines (fallback)"
+      ],
+      "selection_logic": "When AI processes a lead, it looks for guidelines in this order: (1) Agent-specific + Tour Type match, (2) Market-specific + Tour Type match, (3) General guidelines for Tour Type"
+    },
+
+    "field_definitions": {
+      
+      "basic_information": {
+        "section_name": "Basic Information",
+        "fields": [
+          {
+            "field_name": "guideline_title",
+            "field_id": "guideline_title",
+            "type": "text",
+            "required": true,
+            "max_length": 100,
+            "placeholder": "e.g., UK School Groups - Standard",
+            "description": "Human-readable name for this guideline",
+            "validation": "Must be unique within the system"
+          },
+          {
+            "field_name": "status",
+            "field_id": "status",
+            "type": "dropdown",
+            "required": true,
+            "options": [
+              {"value": "active", "label": "Active"},
+              {"value": "inactive", "label": "Inactive"}
+            ],
+            "default": "active",
+            "description": "Only active guidelines are used by AI"
+          },
+          {
+            "field_name": "market",
+            "field_id": "market",
+            "type": "multi-select",
+            "required": true,
+            "data_source": "markets_table",
+            "description": "Markets this guideline applies to",
+            "notes": "Markets are defined in system configuration. Lead parsing identifies market from email signature/domain."
+          },
+          {
+            "field_name": "agent",
+            "field_id": "agent",
+            "type": "multi-select",
+            "required": false,
+            "data_source": "agents_table",
+            "description": "Specific agents this guideline applies to. If empty, applies to all agents in selected markets.",
+            "notes": "Agent-specific guidelines override market guidelines. Lead parsing identifies agent from email."
+          },
+          {
+            "field_name": "tour_type",
+            "field_id": "tour_type",
+            "type": "dropdown",
+            "required": true,
+            "options": [
+              {"value": "fit", "label": "FIT (Free Independent Traveler)"},
+              {"value": "group", "label": "Group Tour"},
+              {"value": "school", "label": "School Group"},
+              {"value": "corporate", "label": "Corporate Group"},
+              {"value": "event", "label": "Event-Based Group"}
+            ],
+            "description": "Tour type determines which sections are visible and which rules apply",
+            "conditional_display_trigger": true,
+            "notes": "This field drives major UI changes. FIT shows different sections than Group types."
+          },
+          {
+            "field_name": "language",
+            "field_id": "language",
+            "type": "dropdown",
+            "required": true,
+            "options": [
+              {"value": "english", "label": "English"},
+              {"value": "spanish", "label": "Spanish"},
+              {"value": "french", "label": "French"},
+              {"value": "german", "label": "German"},
+              {"value": "italian", "label": "Italian"},
+              {"value": "hindi", "label": "Hindi"},
+              {"value": "portuguese", "label": "Portuguese"},
+              {"value": "chinese", "label": "Chinese"},
+              {"value": "japanese", "label": "Japanese"}
+            ],
+            "description": "Primary language for guides and communications",
+            "notes": "Can be overridden by lead parsing if customer specifies different language"
+          }
+        ]
+      },
+
+      "accommodation": {
+        "section_name": "Accommodation",
+        "always_visible": true,
+        "fields": [
+          {
+            "field_name": "star_rating",
+            "field_id": "star_rating",
+            "type": "dropdown",
+            "required": true,
+            "options": [
+              {"value": "3", "label": "3-Star"},
+              {"value": "4", "label": "4-Star"},
+              {"value": "5", "label": "5-Star"},
+              {"value": "3-4", "label": "3-4 Star Mix"},
+              {"value": "budget", "label": "Budget (2-3 Star)"}
+            ],
+            "description": "Target hotel star rating",
+            "notes": "AI uses this as primary hotel filter. Can be overridden by lead parsing if customer specifies budget or rating."
+          },
+          {
+            "field_name": "city_center_priority",
+            "field_id": "city_center_priority",
+            "type": "radio",
+            "required": true,
+            "options": [
+              {"value": "yes", "label": "City Center Priority (strict)"},
+              {"value": "no", "label": "Flexible (city center or outskirts acceptable)"}
+            ],
+            "default": "yes",
+            "description": "Hotel location preference",
+            "business_logic": {
+              "if_yes": "AI will only select hotels in city center. If unavailable, will flag and ask for human intervention.",
+              "if_no": "AI can select hotels in outskirts if city center unavailable or budget-optimized."
+            }
+          },
+          {
+            "field_name": "hotel_brand_strategy",
+            "field_id": "hotel_brand_strategy",
+            "type": "dropdown",
+            "required": true,
+            "options": [
+              {"value": "chain-only", "label": "Chain Hotels Only (Novotel, Movenpick, NH, Mercure, etc.)"},
+              {"value": "chain-preferred", "label": "Chain Preferred, Local Acceptable"},
+              {"value": "mix", "label": "Mix Chain & Local (Cost Optimized)"},
+              {"value": "local-preferred", "label": "Local Hotels Preferred"},
+              {"value": "budget-optimized", "label": "Budget Optimized (Any)"}
+            ],
+            "default": "chain-preferred",
+            "description": "Hotel brand/chain preference strategy",
+            "business_logic": "AI uses this to filter hotels. Chain-only = only select Novotel, Movenpick, NH, Mercure, ibis, etc. Mix/Budget = consider local hotels."
+          },
+          {
+            "field_name": "preferred_hotel_brands",
+            "field_id": "preferred_hotel_brands",
+            "type": "reference",
+            "data_source": "agent_settings.preferred_brands",
+            "required": false,
+            "description": "Links to agent's preferred hotel brands configured in agent settings",
+            "notes": "DO NOT duplicate data. This field references agent settings. If agent has preferred brands set, AI uses those. If not, AI follows hotel_brand_strategy.",
+            "integration_requirement": "Dev must query agent_settings.preferred_brands and display as read-only reference. Clicking opens agent settings page."
+          },
+          {
+            "field_name": "blacklisted_hotels",
+            "field_id": "blacklisted_hotels",
+            "type": "reference",
+            "data_source": "agent_settings.blacklisted_hotels",
+            "required": false,
+            "description": "Links to agent's blacklisted hotels configured in agent settings",
+            "notes": "DO NOT duplicate data. This field references agent settings. AI will never select blacklisted hotels.",
+            "integration_requirement": "Dev must query agent_settings.blacklisted_hotels and display as read-only reference. Clicking opens agent settings page."
+          },
+          {
+            "field_name": "breakfast_included",
+            "field_id": "breakfast_included",
+            "type": "radio",
+            "required": true,
+            "options": [
+              {"value": "yes", "label": "Yes (Always include breakfast)"},
+              {"value": "no", "label": "No"}
+            ],
+            "default": "yes",
+            "description": "Whether to include breakfast in hotel rates",
+            "notes": "Almost always Yes. No is rare for budget-conscious clients."
+          }
+        ]
+      },
+
+      "meals_restaurants": {
+        "section_name": "Meals & Restaurants",
+        "visible_when": "tour_type IN ['group', 'school', 'corporate', 'event']",
+        "hidden_when": "tour_type = 'fit'",
+        "description": "Meal planning for group tours. FIT tours typically don't include meals as restaurants require 8-10 minimum paying guests.",
+        "fields": [
+          {
+            "field_name": "meal_plan",
+            "field_id": "meal_plan",
+            "type": "dropdown",
+            "required": true,
+            "options": [
+              {"value": "breakfast-only", "label": "Breakfast Only (BB)"},
+              {"value": "half-board", "label": "Half Board (Breakfast + Dinner)"},
+              {"value": "full-board", "label": "Full Board (Breakfast, Lunch, Dinner)"},
+              {"value": "custom", "label": "Custom"}
+            ],
+            "default": "half-board",
+            "description": "Standard meal plan for group tours",
+            "notes": "Most group tours use Half Board. Full Board for school groups or long tours."
+          },
+          {
+            "field_name": "cuisine_type",
+            "field_id": "cuisine_type",
+            "type": "dropdown",
+            "required": true,
+            "options": [
+              {"value": "indian-only", "label": "Indian Only (all dinners at Indian restaurants)"},
+              {"value": "international", "label": "International"},
+              {"value": "local", "label": "Local Cuisine"},
+              {"value": "mix", "label": "Mix Indian & Local"}
+            ],
+            "description": "Cuisine preference for group meals",
+            "conditional_display_trigger": true,
+            "business_logic": "If indian-only or mix selected, show indian_meal_template section",
+            "notes": "Indian market groups typically use 'indian-only'. European/US markets use 'local' or 'international'."
+          },
+          {
+            "field_name": "indian_meal_template",
+            "field_id": "indian_meal_template",
+            "type": "textarea",
+            "required": false,
+            "visible_when": "cuisine_type IN ['indian-only', 'mix']",
+            "max_length": 500,
+            "placeholder": "e.g., 1 non-veg curry, 2 veg curries, rice, dal, naan, poppadam, pickle, yogurt, salad, 1 dessert",
+            "default": "1 non-veg curry, 2 veg curries, rice, dal, naan, poppadam, pickle, yogurt, salad, 1 dessert",
+            "description": "Standard menu template for Indian meals",
+            "notes": "This is what AI includes in quotation when selecting Indian restaurants"
+          },
+          {
+            "field_name": "dietary_requirements",
+            "field_id": "dietary_requirements",
+            "type": "multi-checkbox",
+            "required": false,
+            "visible_when": "cuisine_type IN ['indian-only', 'mix']",
+            "options": [
+              {"value": "halal", "label": "Halal"},
+              {"value": "vegetarian", "label": "Vegetarian Options"},
+              {"value": "jain", "label": "Jain Options"},
+              {"value": "no-pork", "label": "No Pork"},
+              {"value": "no-beef", "label": "No Beef"}
+            ],
+            "description": "Dietary requirements for Indian meals",
+            "notes": "AI uses this to filter restaurants and inform quotation text"
+          },
+          {
+            "field_name": "meal_style",
+            "field_id": "meal_style",
+            "type": "dropdown",
+            "required": true,
+            "options": [
+              {"value": "buffet", "label": "Buffet"},
+              {"value": "3-course", "label": "3-Course Set Menu"},
+              {"value": "2-course", "label": "2-Course Set Menu"},
+              {"value": "mix", "label": "Mix (Buffet & Set Menu)"}
+            ],
+            "default": "buffet",
+            "description": "Meal service style preference"
+          },
+          {
+            "field_name": "restaurant_type_preference",
+            "field_id": "restaurant_type_preference",
+            "type": "dropdown",
+            "required": true,
+            "options": [
+              {"value": "student-friendly", "label": "Student Group Friendly"},
+              {"value": "family-style", "label": "Family Style"},
+              {"value": "upscale", "label": "Upscale Dining"},
+              {"value": "budget", "label": "Budget Friendly"},
+              {"value": "any", "label": "Any (Cost Optimized)"}
+            ],
+            "default": "family-style",
+            "description": "Restaurant atmosphere and pricing preference"
+          },
+          {
+            "field_name": "packed_meal_rules",
+            "field_id": "packed_meal_rules",
+            "type": "textarea",
+            "required": false,
+            "max_length": 300,
+            "placeholder": "e.g., Packed meals (veg only) provided in case of time constraints or delays",
+            "default": "Packed meals (vegetarian only) provided in case of time constraints or delays",
+            "description": "Rules for packed meals when sit-down dining not possible"
+          }
+        ]
+      },
+
+      "transport_transfers": {
+        "section_name": "Transport & Transfers",
+        "always_visible": true,
+        "description": "Transport preferences differ significantly between FIT and Group tours",
+        "fields": [
+          {
+            "field_name": "fit_train_priority",
+            "field_id": "fit_train_priority",
+            "type": "dropdown",
+            "required": true,
+            "visible_when": "tour_type = 'fit'",
+            "options": [
+              {"value": "preferred", "label": "Preferred for journeys < 2 hours"},
+              {"value": "flexible", "label": "Flexible (balance cost vs time)"},
+              {"value": "avoid", "label": "Avoid (flights preferred)"}
+            ],
+            "default": "preferred",
+            "description": "Train vs flight preference for FIT tours",
+            "business_logic": "If preferred: AI uses trains for Paris-Brussels, Brussels-Amsterdam, Barcelona-Madrid type journeys. If avoid: AI prefers flights."
+          },
+          {
+            "field_name": "fit_train_class",
+            "field_id": "fit_train_class",
+            "type": "dropdown",
+            "required": true,
+            "visible_when": "tour_type = 'fit'",
+            "options": [
+              {"value": "1st", "label": "1st Class"},
+              {"value": "2nd", "label": "2nd Class"},
+              {"value": "flexible", "label": "Flexible (cost-dependent)"}
+            ],
+            "default": "1st",
+            "description": "Train class for FIT tours"
+          },
+          {
+            "field_name": "fit_airport_transfers",
+            "field_id": "fit_airport_transfers",
+            "type": "dropdown",
+            "required": true,
+            "visible_when": "tour_type = 'fit'",
+            "options": [
+              {"value": "private", "label": "Private Transfers"},
+              {"value": "shared", "label": "Shared Transfers"},
+              {"value": "public", "label": "Public Transport Acceptable"}
+            ],
+            "default": "private",
+            "description": "Airport transfer preference for FIT tours",
+            "business_logic": "Private = dedicated car/van. Shared = SIC shuttle. Public = train/metro instructions only."
+          },
+          {
+            "field_name": "fit_sic_tours_acceptable",
+            "field_id": "fit_sic_tours_acceptable",
+            "type": "radio",
+            "required": true,
+            "visible_when": "tour_type = 'fit'",
+            "options": [
+              {"value": "yes", "label": "Yes (cost-effective)"},
+              {"value": "no", "label": "No (private tours only)"}
+            ],
+            "default": "yes",
+            "description": "Whether SIC (seat-in-coach) tours are acceptable for FIT",
+            "business_logic": "If yes: AI can use SIC tours like 'Paris City Tour SIC 4hrs'. If no: AI only uses private tours."
+          },
+          {
+            "field_name": "group_coach_category",
+            "field_id": "group_coach_category",
+            "type": "dropdown",
+            "required": true,
+            "visible_when": "tour_type IN ['group', 'school', 'corporate', 'event']",
+            "options": [
+              {"value": "premium", "label": "Premium (AC, WiFi, Restroom)"},
+              {"value": "standard", "label": "Standard (AC, Comfortable)"},
+              {"value": "basic", "label": "Basic (AC Only)"},
+              {"value": "budget", "label": "Budget Optimized"}
+            ],
+            "default": "standard",
+            "description": "Coach quality category for group tours"
+          },
+          {
+            "field_name": "group_max_driving_hours",
+            "field_id": "group_max_driving_hours",
+            "type": "number",
+            "required": true,
+            "visible_when": "tour_type IN ['group', 'school', 'corporate', 'event']",
+            "min": 8,
+            "max": 12,
+            "default": 11,
+            "description": "Maximum driving hours per day for coach",
+            "business_logic": "EU regulation: coaches can drive max 11 hours between 08:00-20:00. This is a constraint rule.",
+            "notes": "Default 11 is EU standard. Some operators use 10 for safety margin."
+          },
+          {
+            "field_name": "group_driving_time_window",
+            "field_id": "group_driving_time_window",
+            "type": "text",
+            "required": true,
+            "visible_when": "tour_type IN ['group', 'school', 'corporate', 'event']",
+            "default": "08:00 - 20:00",
+            "validation": "Must be in HH:MM - HH:MM format",
+            "description": "Allowed driving time window (EU regulation)"
+          },
+          {
+            "field_name": "group_driver_tips",
+            "field_id": "group_driver_tips",
+            "type": "number",
+            "required": true,
+            "visible_when": "tour_type IN ['group', 'school', 'corporate', 'event']",
+            "min": 0,
+            "max": 10,
+            "default": 2,
+            "description": "Driver tips per person per day (EUR/GBP)",
+            "business_logic": "Mandatory for group tours. Typically 2 EUR/GBP per person per day.",
+            "notes": "This is added to quotation as separate line item and communicated to customers"
+          }
+        ]
+      },
+
+      "activities_tours": {
+        "section_name": "Activities & Tours",
+        "always_visible": true,
+        "fields": [
+          {
+            "field_name": "fit_activity_mix",
+            "field_id": "fit_activity_mix",
+            "type": "dropdown",
+            "required": true,
+            "visible_when": "tour_type = 'fit'",
+            "options": [
+              {"value": "sic-heavy", "label": "SIC Tours Heavy (cost-effective)"},
+              {"value": "balanced", "label": "Balanced SIC & Self-Guided"},
+              {"value": "self-guided", "label": "Self-Guided Preferred (hop-on-hop-off, entrance tickets)"},
+              {"value": "private", "label": "Private Tours Only"}
+            ],
+            "default": "balanced",
+            "description": "Activity type mix for FIT tours",
+            "business_logic": "SIC = shared tours (e.g., 'Venice City Tour SIC 4hrs'). Self-guided = hop-on-hop-off buses, entrance tickets. Private = dedicated guide/transport."
+          },
+          {
+            "field_name": "fit_hoho_acceptable",
+            "field_id": "fit_hoho_acceptable",
+            "type": "radio",
+            "required": true,
+            "visible_when": "tour_type = 'fit'",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "no", "label": "No"}
+            ],
+            "default": "yes",
+            "description": "Whether hop-on-hop-off bus tickets acceptable for FIT",
+            "business_logic": "If yes: AI can use HOHO tickets for city sightseeing. If no: AI uses guided tours or entrance tickets only."
+          },
+          {
+            "field_name": "fit_optional_activities_strategy",
+            "field_id": "fit_optional_activities_strategy",
+            "type": "dropdown",
+            "required": true,
+            "visible_when": "tour_type = 'fit'",
+            "options": [
+              {"value": "suggest", "label": "Suggest as Optional Add-Ons (with pricing)"},
+              {"value": "include", "label": "Include in Base Quote"},
+              {"value": "exclude", "label": "Do Not Include"}
+            ],
+            "default": "suggest",
+            "description": "How to handle optional activities in FIT quotes",
+            "business_logic": "Suggest = list optional activities with prices separately. Include = add to main itinerary. Exclude = don't mention."
+          },
+          {
+            "field_name": "group_activity_type",
+            "field_id": "group_activity_type",
+            "type": "dropdown",
+            "required": true,
+            "visible_when": "tour_type IN ['group', 'school', 'corporate', 'event']",
+            "options": [
+              {"value": "guided-only", "label": "Guided Tours Only"},
+              {"value": "mix", "label": "Mix Guided & Free Time"},
+              {"value": "cultural-heavy", "label": "Cultural Heavy (museums, historical sites)"},
+              {"value": "adventure", "label": "Adventure Focused"},
+              {"value": "educational", "label": "Educational (School Groups)"}
+            ],
+            "default": "mix",
+            "description": "Activity type preference for group tours"
+          },
+          {
+            "field_name": "group_guide_requirements",
+            "field_id": "group_guide_requirements",
+            "type": "dropdown",
+            "required": true,
+            "visible_when": "tour_type IN ['group', 'school', 'corporate', 'event']",
+            "options": [
+              {"value": "half-day", "label": "Half-Day Guides in Major Cities (2-3 hours)"},
+              {"value": "full-day", "label": "Full-Day Guides Throughout"},
+              {"value": "specific", "label": "Specific Attractions Only"},
+              {"value": "none", "label": "No Guides (Self-Guided)"}
+            ],
+            "default": "half-day",
+            "description": "Guide allocation for group tours",
+            "business_logic": "Half-day = 2-3 hour guides in Venice, Florence, Rome, etc. Full-day = guide with group all day. Specific = only for paid attractions."
+          },
+          {
+            "field_name": "activity_intensity",
+            "field_id": "activity_intensity",
+            "type": "dropdown",
+            "required": true,
+            "options": [
+              {"value": "packed", "label": "Packed Schedule (4 activities/day max)"},
+              {"value": "moderate", "label": "Moderate (3 activities/day max)"},
+              {"value": "relaxed", "label": "Relaxed (2 activities/day max)"}
+            ],
+            "default": "moderate",
+            "description": "Daily activity intensity preference",
+            "business_logic": "This sets max_activities_per_day constraint. Packed=4, Moderate=3, Relaxed=2. AI will not exceed this limit."
+          },
+          {
+            "field_name": "free_time_allocation",
+            "field_id": "free_time_allocation",
+            "type": "dropdown",
+            "required": true,
+            "options": [
+              {"value": "minimal", "label": "Minimal Free Time (packed itinerary)"},
+              {"value": "moderate", "label": "Moderate (evenings free, some free afternoons)"},
+              {"value": "generous", "label": "Generous (full free days included)"}
+            ],
+            "default": "moderate",
+            "description": "Free time vs structured activity balance"
+          }
+        ]
+      },
+
+      "commercial_parameters": {
+        "section_name": "Commercial Parameters",
+        "always_visible": true,
+        "fields": [
+          {
+            "field_name": "margin_percentage",
+            "field_id": "margin_percentage",
+            "type": "number",
+            "required": false,
+            "min": 0,
+            "max": 50,
+            "step": 0.5,
+            "placeholder": "e.g., 10",
+            "description": "Markup percentage for this market/agent",
+            "notes": "If empty, inherits from agent settings. If set here, overrides agent settings for this specific guideline.",
+            "integration_requirement": "Check agent_settings.margin_percentage first. If guideline has value, override agent setting."
+          },
+          {
+            "field_name": "pricing_currency",
+            "field_id": "pricing_currency",
+            "type": "dropdown",
+            "required": true,
+            "options": [
+              {"value": "eur", "label": "EUR"},
+              {"value": "gbp", "label": "GBP"},
+              {"value": "usd", "label": "USD"}
+            ],
+            "default": "eur",
+            "description": "Currency for quotation pricing",
+            "notes": "Base currency is GBP in system. Quotes display in selected currency."
+          },
+          {
+            "field_name": "offer_format",
+            "field_id": "offer_format",
+            "type": "dropdown",
+            "required": true,
+            "options": [
+              {"value": "itemized", "label": "Itemized (services priced separately)"},
+              {"value": "package", "label": "Package (total per person price)"},
+              {"value": "both", "label": "Both (itemized breakdown + package total)"}
+            ],
+            "default": "itemized",
+            "description": "How pricing is presented in the quotation",
+            "business_logic": {
+              "itemized": "Each service shown separately (Hotel: €X, Transfers: €Y, Activities: €Z). Common for FIT - allows flexibility to add/remove services.",
+              "package": "Single per-person price bundling all services. Common for groups - simpler, cleaner presentation.",
+              "both": "Shows itemized breakdown AND total package price. Provides transparency while keeping it simple."
+            },
+            "notes": "FIT typically uses itemized for flexibility. Groups typically use package for simplicity. 'Both' option provides best of both worlds."
+          },
+          {
+            "field_name": "fit_non_refundable_pricing",
+            "field_id": "fit_non_refundable_pricing",
+            "type": "radio",
+            "required": true,
+            "visible_when": "tour_type = 'fit'",
+            "options": [
+              {"value": "yes", "label": "Yes (aggressive pricing, 100% cancellation)"},
+              {"value": "no", "label": "No (standard cancellation terms)"},
+              {"value": "flexible", "label": "Flexible (depends on lead budget)"}
+            ],
+            "default": "flexible",
+            "description": "Non-refundable pricing strategy for FIT tours",
+            "business_logic": "Non-refundable = lower rates but 100% cancellation once confirmed. Used for last-minute or budget-conscious FIT clients."
+          },
+          {
+            "field_name": "foc_brackets",
+            "field_id": "foc_brackets",
+            "type": "table",
+            "required": true,
+            "visible_when": "tour_type IN ['group', 'school', 'corporate', 'event']",
+            "description": "FOC (Free of Charge) brackets for group tours",
+            "table_structure": {
+              "columns": [
+                {
+                  "column_name": "from_pax",
+                  "type": "number",
+                  "required": true,
+                  "min": 1,
+                  "description": "Minimum paying passengers"
+                },
+                {
+                  "column_name": "to_pax",
+                  "type": "number",
+                  "required": true,
+                  "min": 1,
+                  "description": "Maximum paying passengers"
+                },
+                {
+                  "column_name": "foc_count",
+                  "type": "number",
+                  "required": true,
+                  "min": 0,
+                  "description": "Number of FOC (free) pax"
+                },
+                {
+                  "column_name": "room_type",
+                  "type": "dropdown",
+                  "required": true,
+                  "options": [
+                    {"value": "single", "label": "Single"},
+                    {"value": "twin", "label": "Twin"},
+                    {"value": "triple", "label": "Triple"}
+                  ],
+                  "description": "Room type for FOC"
+                }
+              ],
+              "default_rows": [
+                {"from_pax": 15, "to_pax": 19, "foc_count": 1, "room_type": "single"},
+                {"from_pax": 20, "to_pax": 24, "foc_count": 1, "room_type": "single"},
+                {"from_pax": 25, "to_pax": 29, "foc_count": 1, "room_type": "single"},
+                {"from_pax": 30, "to_pax": 34, "foc_count": 1, "room_type": "single"},
+                {"from_pax": 35, "to_pax": 39, "foc_count": 1, "room_type": "single"}
+              ],
+              "allow_add_rows": true,
+              "allow_remove_rows": true
+            },
+            "business_logic": "FOC = tour leader/teacher travels free. Applied when group size matches bracket. Affects pricing calculation.",
+            "notes": "Standard: 1 FOC single from 15 pax. Adjust brackets as needed per market."
+          }
+        ]
+      }
+    },
+
+    "conditional_display_rules": {
+      "description": "UI rules for showing/hiding sections and fields based on user selections",
+      "rules": [
+        {
+          "trigger_field": "tour_type",
+          "trigger_value": "fit",
+          "actions": [
+            {"action": "hide", "target": "meals_restaurants"},
+            {"action": "show", "target": "fit_train_priority"},
+            {"action": "show", "target": "fit_train_class"},
+            {"action": "show", "target": "fit_airport_transfers"},
+            {"action": "show", "target": "fit_sic_tours_acceptable"},
+            {"action": "show", "target": "fit_activity_mix"},
+            {"action": "show", "target": "fit_hoho_acceptable"},
+            {"action": "show", "target": "fit_optional_activities_strategy"},
+            {"action": "show", "target": "fit_non_refundable_pricing"},
+            {"action": "hide", "target": "group_coach_category"},
+            {"action": "hide", "target": "group_max_driving_hours"},
+            {"action": "hide", "target": "group_driving_time_window"},
+            {"action": "hide", "target": "group_driver_tips"},
+            {"action": "hide", "target": "group_activity_type"},
+            {"action": "hide", "target": "group_guide_requirements"},
+            {"action": "hide", "target": "foc_brackets"}
+          ]
+        },
+        {
+          "trigger_field": "tour_type",
+          "trigger_value": ["group", "school", "corporate", "event"],
+          "actions": [
+            {"action": "show", "target": "meals_restaurants"},
+            {"action": "hide", "target": "fit_train_priority"},
+            {"action": "hide", "target": "fit_train_class"},
+            {"action": "hide", "target": "fit_airport_transfers"},
+            {"action": "hide", "target": "fit_sic_tours_acceptable"},
+            {"action": "hide", "target": "fit_activity_mix"},
+            {"action": "hide", "target": "fit_hoho_acceptable"},
+            {"action": "hide", "target": "fit_optional_activities_strategy"},
+            {"action": "hide", "target": "fit_non_refundable_pricing"},
+            {"action": "show", "target": "group_coach_category"},
+            {"action": "show", "target": "group_max_driving_hours"},
+            {"action": "show", "target": "group_driving_time_window"},
+            {"action": "show", "target": "group_driver_tips"},
+            {"action": "show", "target": "group_activity_type"},
+            {"action": "show", "target": "group_guide_requirements"},
+            {"action": "show", "target": "foc_brackets"}
+          ]
+        },
+        {
+          "trigger_field": "cuisine_type",
+          "trigger_value": ["indian-only", "mix"],
+          "actions": [
+            {"action": "show", "target": "indian_meal_template"},
+            {"action": "show", "target": "dietary_requirements"}
+          ]
+        },
+        {
+          "trigger_field": "cuisine_type",
+          "trigger_value": ["international", "local"],
+          "actions": [
+            {"action": "hide", "target": "indian_meal_template"},
+            {"action": "hide", "target": "dietary_requirements"}
+          ]
+        }
+      ]
+    },
+
+    "data_structure": {
+      "description": "JSON structure for saving quotation guideline to database",
+      "example": {
+        "guideline_id": "guid_12345",
+        "guideline_title": "Indian Market - Leisure Groups",
+        "status": "active",
+        "market": ["india"],
+        "agent": [],
+        "tour_type": "group",
+        "language": "english",
+        "accommodation": {
+          "star_rating": "3-4",
+          "city_center_priority": "no",
+          "hotel_brand_strategy": "mix",
+          "breakfast_included": "yes"
+        },
+        "meals": {
+          "meal_plan": "half-board",
+          "cuisine_type": "indian-only",
+          "indian_meal_template": "1 non-veg curry, 2 veg curries, rice, dal, naan, poppadam, pickle, yogurt, salad, 1 dessert",
+          "dietary_requirements": ["vegetarian", "no-beef"],
+          "meal_style": "buffet",
+          "restaurant_type_preference": "family-style",
+          "packed_meal_rules": "Packed meals (vegetarian only) provided in case of time constraints or delays"
+        },
+        "transport": {
+          "group_coach_category": "standard",
+          "group_max_driving_hours": 11,
+          "group_driving_time_window": "08:00 - 20:00",
+          "group_driver_tips": 2
+        },
+        "activities": {
+          "group_activity_type": "cultural-heavy",
+          "group_guide_requirements": "half-day",
+          "activity_intensity": "moderate",
+          "free_time_allocation": "moderate"
+        },
+        "commercial": {
+          "margin_percentage": 12,
+          "pricing_currency": "eur",
+          "offer_format": "package",
+          "foc_brackets": [
+            {"from_pax": 15, "to_pax": 19, "foc_count": 1, "room_type": "single"},
+            {"from_pax": 20, "to_pax": 24, "foc_count": 1, "room_type": "single"},
+            {"from_pax": 25, "to_pax": 29, "foc_count": 1, "room_type": "single"}
+          ]
+        },
+        "created_at": "2025-11-24T10:30:00Z",
+        "updated_at": "2025-11-24T10:30:00Z",
+        "created_by": "user_id_123"
+      }
+    },
+
+    "integration_requirements": {
+      "agent_settings_integration": {
+        "description": "Quotation guidelines must read from agent settings for certain fields",
+        "fields_to_integrate": [
+          {
+            "field": "preferred_hotel_brands",
+            "source": "agent_settings.preferred_brands",
+            "behavior": "Display as read-only reference. Link to agent settings. AI uses agent preferred brands unless guideline overrides.",
+            "fallback": "If no agent preferred brands, AI follows hotel_brand_strategy from guideline."
+          },
+          {
+            "field": "blacklisted_hotels",
+            "source": "agent_settings.blacklisted_hotels",
+            "behavior": "Display as read-only reference. Link to agent settings. AI never selects blacklisted hotels.",
+            "fallback": "If no blacklisted hotels, no restriction."
+          },
+          {
+            "field": "margin_percentage",
+            "source": "agent_settings.margin_percentage",
+            "behavior": "If guideline margin_percentage is empty, inherit from agent settings. If guideline has value, override agent setting.",
+            "fallback": "If neither set, use system default (e.g., 10%)."
+          }
+        ]
+      },
+      "lead_parsing_integration": {
+        "description": "Lead parsing data overrides guideline values when present",
+        "priority": "Lead Parsing > Guideline > Agent Settings > System Defaults",
+        "examples": [
+          {
+            "scenario": "Lead specifies '4-star hotels'",
+            "behavior": "Use 4-star from lead, ignore guideline star_rating"
+          },
+          {
+            "scenario": "Lead specifies budget €50-80 per night",
+            "behavior": "AI uses budget to filter hotels, may adjust star_rating if needed"
+          },
+          {
+            "scenario": "Lead says 'vegetarian group'",
+            "behavior": "Override dietary_requirements to vegetarian-only, even if guideline doesn't specify"
+          },
+          {
+            "scenario": "Lead specifies group size 25 pax",
+            "behavior": "AI applies FOC bracket for 25-29 pax from guideline"
+          }
+        ]
+      }
+    },
+
+    "validation_rules": {
+      "required_fields": [
+        "guideline_title",
+        "status",
+        "market",
+        "tour_type",
+        "language",
+        "star_rating",
+        "city_center_priority",
+        "hotel_brand_strategy",
+        "breakfast_included",
+        "activity_intensity",
+        "free_time_allocation",
+        "pricing_currency"
+      ],
+      "conditional_required": [
+        {
+          "condition": "tour_type IN ['group', 'school', 'corporate', 'event']",
+          "required_fields": [
+            "meal_plan",
+            "cuisine_type",
+            "meal_style",
+            "restaurant_type_preference",
+            "group_coach_category",
+            "group_max_driving_hours",
+            "group_driving_time_window",
+            "group_driver_tips",
+            "group_activity_type",
+            "group_guide_requirements",
+            "foc_brackets"
+          ]
+        },
+        {
+          "condition": "tour_type = 'fit'",
+          "required_fields": [
+            "fit_train_priority",
+            "fit_train_class",
+            "fit_airport_transfers",
+            "fit_sic_tours_acceptable",
+            "fit_activity_mix",
+            "fit_hoho_acceptable",
+            "fit_optional_activities_strategy",
+            "fit_non_refundable_pricing"
+          ]
+        },
+        {
+          "condition": "cuisine_type IN ['indian-only', 'mix']",
+          "required_fields": [
+            "indian_meal_template"
+          ]
+        }
+      ],
+      "business_rules": [
+        {
+          "rule": "FOC brackets must not overlap",
+          "validation": "Check that to_pax of bracket N < from_pax of bracket N+1"
+        },
+        {
+          "rule": "Guideline title must be unique",
+          "validation": "Check against existing guidelines in database"
+        },
+        {
+          "rule": "Market and Agent combination must be unique per tour_type",
+          "validation": "Cannot have two guidelines with same market + agent + tour_type"
+        }
+      ]
+    },
+
+    "ai_workflow_usage": {
+      "description": "How AI uses quotation guidelines during quote generation",
+      "workflow": [
+        {
+          "step": 1,
+          "node": "Lead Parsing",
+          "action": "Extract market, agent, tour type, group size, budget, preferences from email"
+        },
+        {
+          "step": 2,
+          "node": "Guideline Selection",
+          "action": "Query guidelines: (1) Agent + Tour Type match, (2) Market + Tour Type match, (3) Default for Tour Type"
+        },
+        {
+          "step": 3,
+          "node": "Parameter Loading",
+          "action": "Load guideline parameters. Override with lead parsing data where present. Inherit from agent settings where applicable."
+        },
+        {
+          "step": 4,
+          "node": "Itinerary Building",
+          "action": "Use guideline parameters to select hotels (star rating, location, brand), activities (intensity, type, guides), transport (coach/train/flight), meals (cuisine, style)"
+        },
+        {
+          "step": 5,
+          "node": "Pricing Calculation",
+          "action": "Apply margin%, FOC brackets (if group), calculate slab pricing (if group), generate per-person pricing"
+        },
+        {
+          "step": 6,
+          "node": "Quote Generation",
+          "action": "Generate quotation text with selected services, pricing, terms and conditions"
+        }
+      ],
+      "decision_examples": [
+        {
+          "scenario": "FIT couple, UK market, 7 nights Italy",
+          "guideline_used": "UK Market - FIT",
+          "decisions": [
+            "Hotel: 4-star chain (Novotel/NH), city center, breakfast included",
+            "Transport: Trains for short hops (Rome-Florence), private airport transfers",
+            "Activities: Mix SIC tours + HOHO tickets + entrance tickets",
+            "Meals: Breakfast only (no dinners)",
+            "Pricing: Non-refundable, per-person EUR"
+          ]
+        },
+        {
+          "scenario": "Indian leisure group, 25 pax, 7N/8D Italy",
+          "guideline_used": "Indian Market - Leisure Groups",
+          "decisions": [
+            "Hotel: 3-4 star mix (Novotel + local), flexible location, breakfast included",
+            "Transport: Dedicated coach, standard category, max 11hrs driving",
+            "Activities: Half-day guides in major cities, cultural-heavy, moderate intensity",
+            "Meals: Half board, all dinners at Indian restaurants, standard menu (1 non-veg, 2 veg curries, rice, dal, naan, etc.), vegetarian options",
+            "Pricing: Slab pricing, 1 FOC single (25-29 bracket), EUR"
+          ]
+        }
+      ]
+    },
+
+    "ui_mockup_reference": {
+      "file": "quotation_guidelines_mockup.html",
+      "description": "Interactive HTML mockup showing all fields, sections, conditional display, and user flow",
+      "notes": "Devs should use mockup as visual reference for UI implementation"
+    }
+  }
+}
